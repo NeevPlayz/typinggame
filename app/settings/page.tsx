@@ -1,9 +1,7 @@
 "use client";
 export const dynamic = "force-dynamic";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
-import { signInAnonymously } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { useEffect, useRef, useState } from "react";
 import { joinRoom } from "@/lib/firestore";
 
 const SETTINGS = [
@@ -20,74 +18,50 @@ const SETTINGS = [
   { label: "App Version",      value: "v2.4.1",    icon: "ℹ" },
 ];
 
-const PRIVATE_CODE = "000111";
+const ROOM_CODE = "000111";
+
+// Fixed player accounts — ragini is always P1, neev is always P2
+const USERS: Record<string, { password: string; displayName: string; otherName: string }> = {
+  ragini: { password: "ragini", displayName: "Ragini", otherName: "Neev" },
+  neev:   { password: "neev",   displayName: "Neev",   otherName: "Ragini" },
+};
 
 export default function SettingsPage() {
   const router = useRouter();
-  const [digits, setDigits] = useState<string[]>(Array(6).fill(""));
+  const [showPlayers, setShowPlayers] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [showPlayers, setShowPlayers] = useState(false);
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const [loggedInAs, setLoggedInAs] = useState<string | null>(null);
   const playersRef = useRef<HTMLDivElement>(null);
+  const usernameRef = useRef<HTMLInputElement>(null);
 
-  const code = digits.join("");
-
-  const handleDigit = (i: number, val: string) => {
-    if (!/^\d*$/.test(val)) return;
-    const digit = val.slice(-1);
-    const newDigits = [...digits];
-    newDigits[i] = digit;
-    setDigits(newDigits);
-    setError("");
-    if (digit && i < 5) {
-      inputRefs.current[i + 1]?.focus();
-    }
-  };
-
-  const handleKeyDown = (i: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Backspace") {
-      if (digits[i]) {
-        const d = [...digits]; d[i] = ""; setDigits(d);
-      } else if (i > 0) {
-        const d = [...digits]; d[i - 1] = ""; setDigits(d);
-        inputRefs.current[i - 1]?.focus();
-      }
-    }
-    if (e.key === "Enter") handleSubmit();
-  };
-
-  const handlePaste = (e: React.ClipboardEvent) => {
-    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
-    if (pasted.length > 0) {
-      const newDigits = Array(6).fill("");
-      pasted.split("").forEach((ch, i) => { newDigits[i] = ch; });
-      setDigits(newDigits);
-      const nextFocus = Math.min(pasted.length, 5);
-      inputRefs.current[nextFocus]?.focus();
-    }
-    e.preventDefault();
-  };
+  useEffect(() => {
+    const pid = localStorage.getItem("playerId");
+    const pname = localStorage.getItem("playerName");
+    if (pid && pname && USERS[pid]) setLoggedInAs(pname);
+  }, []);
 
   const handleSubmit = async () => {
-    if (code.length !== 6) { setError("Enter all 6 digits"); return; }
-    if (code !== PRIVATE_CODE) {
-      setError("Room not found. Check your code.");
+    const u = username.trim().toLowerCase();
+    const p = password.trim();
+    const user = USERS[u];
+    if (!user || user.password !== p) {
+      setError("Wrong player tag or access code.");
       return;
     }
     setLoading(true);
     setError("");
     try {
-      const cred = await signInAnonymously(auth);
-      const uid = cred.user.uid;
-      const result = await joinRoom(PRIVATE_CODE, uid);
-      if (!result) { setError("Could not connect. Try again."); setLoading(false); return; }
-      localStorage.setItem("playerId", uid);
-      localStorage.setItem("playerName", `Player 0${result.playerNum}`);
-      localStorage.setItem("roomCode", PRIVATE_CODE);
-      router.push(`/chat/${PRIVATE_CODE}`);
+      await joinRoom(ROOM_CODE, u);
+      localStorage.setItem("playerId", u);
+      localStorage.setItem("playerName", user.displayName);
+      localStorage.setItem("otherName", user.otherName);
+      localStorage.setItem("roomCode", ROOM_CODE);
+      router.push(`/chat/${ROOM_CODE}`);
     } catch {
-      setError("Something went wrong. Try again.");
+      setError("Could not connect. Try again.");
     }
     setLoading(false);
   };
@@ -96,7 +70,7 @@ export default function SettingsPage() {
     setShowPlayers(true);
     setTimeout(() => {
       playersRef.current?.scrollIntoView({ behavior: "smooth" });
-      inputRefs.current[0]?.focus();
+      usernameRef.current?.focus();
     }, 100);
   };
 
@@ -139,56 +113,98 @@ export default function SettingsPage() {
             ) : (
               <div className="slide-up rounded-2xl p-4"
                 style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)" }}>
-                <div className="font-bold text-sm text-white mb-1">Enter Room Code</div>
-                <div className="text-[11px] mb-5" style={{ color: "#4a5568" }}>
-                  6-digit private match code required
-                </div>
 
-                {/* 6-box PIN input */}
-                <div className="flex gap-2 mb-4" onPaste={handlePaste}>
-                  {Array.from({ length: 6 }).map((_, i) => (
-                    <input
-                      key={i}
-                      ref={el => { inputRefs.current[i] = el; }}
-                      type="number"
-                      inputMode="numeric"
-                      maxLength={1}
-                      value={digits[i]}
-                      onChange={e => handleDigit(i, e.target.value)}
-                      onKeyDown={e => handleKeyDown(i, e)}
-                      onFocus={e => e.target.select()}
-                      className="flex-1 h-14 text-center text-xl font-bold outline-none rounded-xl"
-                      style={{
-                        background: digits[i] ? "rgba(0,255,170,0.08)" : "rgba(255,255,255,0.05)",
-                        border: `2px solid ${digits[i] ? "rgba(0,255,170,0.5)" : "rgba(255,255,255,0.08)"}`,
-                        color: "#00ffaa",
-                        WebkitAppearance: "none",
-                        MozAppearance: "textfield",
-                        transition: "all 0.15s",
+                {/* Already logged in */}
+                {loggedInAs ? (
+                  <>
+                    <div className="text-center mb-4">
+                      <div className="text-xs mb-1" style={{ color: "#4a5568" }}>logged in as</div>
+                      <div className="font-bold text-lg" style={{ color: "#00ffaa" }}>{loggedInAs}</div>
+                    </div>
+                    <button
+                      onClick={() => router.push(`/chat/${ROOM_CODE}`)}
+                      className="w-full py-4 rounded-xl font-bold text-sm tracking-widest text-black active:scale-95 transition-transform"
+                      style={{ background: "linear-gradient(135deg,#00ffaa,#00cc88)" }}>
+                      ENTER MATCH
+                    </button>
+                    <button
+                      onClick={() => {
+                        localStorage.removeItem("playerId");
+                        localStorage.removeItem("playerName");
+                        localStorage.removeItem("otherName");
+                        localStorage.removeItem("roomCode");
+                        setLoggedInAs(null);
+                        setUsername("");
+                        setPassword("");
                       }}
-                    />
-                  ))}
-                </div>
+                      className="w-full mt-2 py-2 text-xs" style={{ color: "#2d3748" }}>
+                      Switch player
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="font-bold text-sm text-white mb-1">Private Match</div>
+                    <div className="text-[11px] mb-5" style={{ color: "#4a5568" }}>
+                      Enter your player credentials
+                    </div>
 
-                {error && (
-                  <div className="text-xs text-center py-2 mb-3 rounded-xl slide-up"
-                    style={{ background: "rgba(255,68,68,0.08)", color: "#ff6666", border: "1px solid rgba(255,68,68,0.15)" }}>
-                    {error}
-                  </div>
+                    <div className="flex flex-col gap-3 mb-4">
+                      <input
+                        ref={usernameRef}
+                        type="text"
+                        value={username}
+                        onChange={e => { setUsername(e.target.value); setError(""); }}
+                        onKeyDown={e => e.key === "Enter" && handleSubmit()}
+                        placeholder="Player Tag"
+                        autoCapitalize="none"
+                        autoCorrect="off"
+                        className="w-full rounded-xl px-4 py-3 text-sm outline-none"
+                        style={{
+                          background: "rgba(255,255,255,0.05)",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                          color: "#e2e8f0",
+                        }}
+                        onFocus={e => e.currentTarget.style.borderColor = "rgba(0,255,170,0.4)"}
+                        onBlur={e => e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"}
+                      />
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={e => { setPassword(e.target.value); setError(""); }}
+                        onKeyDown={e => e.key === "Enter" && handleSubmit()}
+                        placeholder="Access Code"
+                        className="w-full rounded-xl px-4 py-3 text-sm outline-none"
+                        style={{
+                          background: "rgba(255,255,255,0.05)",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                          color: "#e2e8f0",
+                        }}
+                        onFocus={e => e.currentTarget.style.borderColor = "rgba(0,255,170,0.4)"}
+                        onBlur={e => e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"}
+                      />
+                    </div>
+
+                    {error && (
+                      <div className="text-xs text-center py-2 mb-3 rounded-xl slide-up"
+                        style={{ background: "rgba(255,68,68,0.08)", color: "#ff6666", border: "1px solid rgba(255,68,68,0.15)" }}>
+                        {error}
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleSubmit}
+                      disabled={loading || !username.trim() || !password.trim()}
+                      className="w-full py-4 rounded-xl font-bold text-sm tracking-widest text-black active:scale-95 transition-transform disabled:opacity-30"
+                      style={{ background: "linear-gradient(135deg,#00ffaa,#00cc88)" }}>
+                      {loading ? "CONNECTING..." : "JOIN MATCH"}
+                    </button>
+
+                    <button onClick={() => { setShowPlayers(false); setUsername(""); setPassword(""); setError(""); }}
+                      className="w-full mt-2 py-2 text-xs" style={{ color: "#2d3748" }}>
+                      Cancel
+                    </button>
+                  </>
                 )}
-
-                <button
-                  onClick={handleSubmit}
-                  disabled={loading || code.length !== 6}
-                  className="w-full py-4 rounded-xl font-bold text-sm tracking-widest text-black active:scale-95 transition-transform disabled:opacity-30"
-                  style={{ background: "linear-gradient(135deg,#00ffaa,#00cc88)" }}>
-                  {loading ? "CONNECTING..." : "JOIN MATCH"}
-                </button>
-
-                <button onClick={() => { setShowPlayers(false); setDigits(Array(6).fill("")); setError(""); }}
-                  className="w-full mt-2 py-2 text-xs" style={{ color: "#2d3748" }}>
-                  Cancel
-                </button>
               </div>
             )}
           </div>

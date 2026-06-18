@@ -5,9 +5,17 @@ import { useEffect, useRef, useState } from "react";
 import {
   listenMessages, sendMessage,
   markSeen, markDelivered, cleanupExpired, Message,
+  updatePresence, listenPresence,
 } from "@/lib/firestore";
 import { registerPushToken } from "@/lib/notifications";
 import { extractLinks } from "@/lib/utils";
+
+function formatLastSeen(date: Date): string {
+  const diff = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  return `${Math.floor(diff / 3600)}h ago`;
+}
 
 function Tick({ status }: { status: Message["status"] }) {
   if (status === "sent") return <span style={{ color: "#4a5568", fontSize: 10 }}>✓</span>;
@@ -83,24 +91,58 @@ export default function ChatPage() {
   const [playerName, setPlayerName] = useState("Player 01");
   const [otherName, setOtherName] = useState("Player 02");
   const [roomCode, setRoomCode] = useState("");
+  const [otherOnline, setOtherOnline] = useState(false);
+  const [otherLastSeen, setOtherLastSeen] = useState<Date | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const playerIdRef = useRef("");
 
+  // Load player info & setup presence
   useEffect(() => {
     const id = localStorage.getItem("playerId") || "";
     const pn = localStorage.getItem("playerName") || "Player 01";
+    const on = localStorage.getItem("otherName") || "Player 02";
     const rc = localStorage.getItem("roomCode") || "";
     setPlayerId(id);
     playerIdRef.current = id;
     setPlayerName(pn);
-    setOtherName(pn === "Player 01" ? "Player 02" : "Player 01");
+    setOtherName(on);
     setRoomCode(rc);
     if (!roomId || !id) return;
     const rid = roomId as string;
     cleanupExpired(rid).catch(() => {});
     registerPushToken(rid, id).catch(() => {});
+
+    // Mark self as online
+    updatePresence(rid, id, true).catch(() => {});
+    const ping = setInterval(() => updatePresence(rid, id, true).catch(() => {}), 20000);
+
+    // Mark offline when leaving
+    const markOffline = () => updatePresence(rid, id, false).catch(() => {});
+    window.addEventListener("beforeunload", markOffline);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) updatePresence(rid, id, false).catch(() => {});
+      else updatePresence(rid, id, true).catch(() => {});
+    });
+
+    return () => {
+      clearInterval(ping);
+      markOffline();
+      window.removeEventListener("beforeunload", markOffline);
+    };
   }, [roomId]);
+
+  // Listen to other player's presence
+  useEffect(() => {
+    if (!roomId || !playerId) return;
+    const rid = roomId as string;
+    const otherId = playerId === "ragini" ? "neev" : "ragini";
+    const unsub = listenPresence(rid, otherId, (data) => {
+      setOtherOnline(data.online);
+      if (data.lastSeen) setOtherLastSeen(data.lastSeen.toDate());
+    });
+    return () => unsub();
+  }, [roomId, playerId]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -135,21 +177,33 @@ export default function ChatPage() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
+  const statusText = otherOnline
+    ? "● online"
+    : otherLastSeen
+    ? `last seen ${formatLastSeen(otherLastSeen)}`
+    : "● offline";
+  const statusColor = otherOnline ? "#00ffaa" : "#4a5568";
+
+  // First letter of name for avatar
+  const avatarLetter = otherName.charAt(0).toUpperCase();
+
   return (
     <div className="h-dvh flex flex-col" style={{ background: "#07000f" }}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-4 pb-3 shrink-0"
         style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
         <div className="flex items-center gap-3">
-          <div className="relative w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-            style={{ background: "linear-gradient(135deg,#6d28d9,#4c1d95)", boxShadow: "0 0 14px rgba(109,40,217,0.4)" }}>
-            {otherName.slice(-2)}
-            <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2"
-              style={{ background: "#00ffaa", borderColor: "#07000f" }} />
+          <div className="relative w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
+            style={{ background: "linear-gradient(135deg,#6d28d9,#4c1d95)", boxShadow: "0 0 14px rgba(109,40,217,0.4)", color: "#fff" }}>
+            {avatarLetter}
+            <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 transition-colors duration-500"
+              style={{ background: otherOnline ? "#00ffaa" : "#4a5568", borderColor: "#07000f" }} />
           </div>
           <div>
             <div className="font-bold text-sm text-white">{otherName}</div>
-            <div className="text-[10px] tracking-wide" style={{ color: "#00ffaa" }}>● in game</div>
+            <div className="text-[10px] tracking-wide transition-colors duration-500" style={{ color: statusColor }}>
+              {statusText}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">

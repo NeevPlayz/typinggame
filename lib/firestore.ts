@@ -25,6 +25,11 @@ export interface Room {
   createdAt: Timestamp;
 }
 
+export interface Presence {
+  online: boolean;
+  lastSeen: Timestamp | null;
+}
+
 // Join or create room, return which player number you are
 export async function joinRoom(
   code: string,
@@ -48,7 +53,6 @@ export async function joinRoom(
     if (!data.player2) await updateDoc(roomRef, { player2: playerId });
     return { room: data, playerNum: 2 };
   }
-  // Room already has 2 different players — still let in as player2 slot
   return { room: data, playerNum: 2 };
 }
 
@@ -67,17 +71,18 @@ export function listenMessages(
   });
 }
 
-// Send text message — expires in 4hr if never seen
+// Send text message — local timestamp to avoid UI delay
 export async function sendMessage(
   roomCode: string,
   text: string,
   senderId: string,
   senderName: string
 ): Promise<void> {
+  const now = Timestamp.fromMillis(Date.now());
   const expireAt = Timestamp.fromMillis(Date.now() + 4 * 60 * 60 * 1000);
   await addDoc(collection(db, "rooms", roomCode, "messages"), {
     text, senderId, senderName, type: "text",
-    timestamp: serverTimestamp(),
+    timestamp: now,
     status: "sent", expireAt,
   });
 }
@@ -111,6 +116,30 @@ export async function cleanupExpired(roomCode: string): Promise<void> {
   );
   const snap = await getDocs(q);
   await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
+}
+
+// Presence — mark yourself online/offline
+export async function updatePresence(
+  roomCode: string,
+  playerId: string,
+  online: boolean
+): Promise<void> {
+  await setDoc(doc(db, "rooms", roomCode, "presence", playerId), {
+    online,
+    lastSeen: serverTimestamp(),
+  });
+}
+
+// Presence — listen to other player's status
+export function listenPresence(
+  roomCode: string,
+  playerId: string,
+  callback: (data: Presence) => void
+) {
+  return onSnapshot(doc(db, "rooms", roomCode, "presence", playerId), (snap) => {
+    if (!snap.exists()) callback({ online: false, lastSeen: null });
+    else callback(snap.data() as Presence);
+  });
 }
 
 // Get other player's FCM token
