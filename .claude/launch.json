@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "TypeBattle Dev Server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "C:\\Users\\anony\\OneDrive\\Desktop\\typebattle",
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}
