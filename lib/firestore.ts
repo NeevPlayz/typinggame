@@ -1,7 +1,7 @@
 import {
   collection, addDoc, onSnapshot, query, orderBy, where,
   doc, updateDoc, getDoc, getDocs, setDoc, deleteDoc,
-  serverTimestamp, Timestamp,
+  serverTimestamp, Timestamp, deleteField,
 } from "firebase/firestore";
 import { db } from "./firebase";
 
@@ -15,6 +15,8 @@ export interface Message {
   seenAt?: Timestamp;
   expireAt?: Timestamp;
   type?: "text";
+  deleted?: boolean;
+  reactions?: Record<string, string>;
 }
 
 export interface Room {
@@ -116,6 +118,30 @@ export async function cleanupExpired(roomCode: string): Promise<void> {
   );
   const snap = await getDocs(q);
   await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
+}
+
+// React to a message with an emoji (null removes reaction)
+export async function reactToMessage(
+  roomCode: string,
+  messageId: string,
+  playerId: string,
+  emoji: string | null
+): Promise<void> {
+  const ref = doc(db, "rooms", roomCode, "messages", messageId);
+  await updateDoc(ref, {
+    [`reactions.${playerId}`]: emoji ?? deleteField(),
+  });
+}
+
+// Delete message for everyone — keeps doc but marks deleted
+export async function deleteMessage(
+  roomCode: string,
+  messageId: string
+): Promise<void> {
+  await updateDoc(doc(db, "rooms", roomCode, "messages", messageId), {
+    deleted: true,
+    text: "",
+  });
 }
 
 // Presence — mark yourself online/offline

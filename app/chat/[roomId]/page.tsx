@@ -1,14 +1,17 @@
 "use client";
 export const dynamic = "force-dynamic";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   listenMessages, sendMessage,
   markSeen, markDelivered, cleanupExpired, Message,
   updatePresence, listenPresence,
+  reactToMessage, deleteMessage,
 } from "@/lib/firestore";
 import { registerPushToken } from "@/lib/notifications";
 import { extractLinks } from "@/lib/utils";
+
+const EMOJIS = ["❤️", "😂", "😮", "😢", "🔥", "👍"];
 
 function formatLastSeen(date: Date): string {
   const diff = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -23,8 +26,16 @@ function Tick({ status }: { status: Message["status"] }) {
   return <span style={{ color: "#00ffaa", fontSize: 10, textShadow: "0 0 5px #00ffaa66" }}>✓✓</span>;
 }
 
-function Bubble({ msg, isMe, onSeen }: { msg: Message; isMe: boolean; onSeen: () => void }) {
+function Bubble({
+  msg, isMe, onSeen, onLongPress,
+}: {
+  msg: Message;
+  isMe: boolean;
+  onSeen: () => void;
+  onLongPress: () => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (isMe || msg.status === "seen") return;
@@ -36,46 +47,89 @@ function Bubble({ msg, isMe, onSeen }: { msg: Message; isMe: boolean; onSeen: ()
     return () => obs.disconnect();
   }, [isMe, msg.status, onSeen]);
 
+  const startHold = () => {
+    holdTimer.current = setTimeout(() => {
+      onLongPress();
+      if (navigator.vibrate) navigator.vibrate(30);
+    }, 500);
+  };
+  const cancelHold = () => {
+    if (holdTimer.current) clearTimeout(holdTimer.current);
+  };
+
   const time = msg.timestamp?.toDate
     ? new Date(msg.timestamp.toDate()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "";
 
+  // Group reactions: emoji → count
+  const reactionGroups: Record<string, number> = {};
+  if (msg.reactions) {
+    Object.values(msg.reactions).forEach(e => {
+      reactionGroups[e] = (reactionGroups[e] || 0) + 1;
+    });
+  }
+  const hasReactions = Object.keys(reactionGroups).length > 0;
+
   return (
     <div className={`flex mb-3 slide-up ${isMe ? "justify-end" : "justify-start"}`}>
       <div className={`max-w-[80%] flex flex-col ${isMe ? "items-end" : "items-start"}`}>
-        {!isMe && (
+        {!isMe && !msg.deleted && (
           <span className="text-[10px] mb-1 ml-2 tracking-wide" style={{ color: "#4a5568" }}>
             {msg.senderName}
           </span>
         )}
         <div
           ref={ref}
+          onTouchStart={startHold}
+          onTouchEnd={cancelHold}
+          onTouchMove={cancelHold}
+          onContextMenu={e => { e.preventDefault(); onLongPress(); }}
           style={{
-            padding: "10px 14px",
+            padding: msg.deleted ? "8px 14px" : "10px 14px",
             borderRadius: isMe ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
             fontSize: 14,
             lineHeight: 1.55,
-            color: "#e2e8f0",
             wordBreak: "break-word",
-            ...(isMe
-              ? { background: "linear-gradient(135deg,#6d28d9,#4c1d95)", boxShadow: "0 2px 14px rgba(109,40,217,0.35)" }
-              : { background: "#12102a", border: "1px solid rgba(255,255,255,0.06)" }),
+            userSelect: "none",
+            WebkitUserSelect: "none",
+            ...(msg.deleted
+              ? { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.05)", color: "#4a5568", fontStyle: "italic" }
+              : isMe
+              ? { background: "linear-gradient(135deg,#6d28d9,#4c1d95)", boxShadow: "0 2px 14px rgba(109,40,217,0.35)", color: "#e2e8f0" }
+              : { background: "#12102a", border: "1px solid rgba(255,255,255,0.06)", color: "#e2e8f0" }),
           }}
         >
-          {extractLinks(msg.text || "").map((part, i) =>
-            part.isLink ? (
-              <a key={i} href={part.url} target="_blank" rel="noopener noreferrer"
-                style={{ color: "#00ffaa", textDecoration: "underline", wordBreak: "break-all" }}
-                onClick={e => e.stopPropagation()}>
-                {part.text}
-              </a>
-            ) : <span key={i}>{part.text}</span>
+          {msg.deleted ? (
+            <span>🚫 message deleted</span>
+          ) : (
+            extractLinks(msg.text || "").map((part, i) =>
+              part.isLink ? (
+                <a key={i} href={part.url} target="_blank" rel="noopener noreferrer"
+                  style={{ color: "#00ffaa", textDecoration: "underline", wordBreak: "break-all" }}
+                  onClick={e => e.stopPropagation()}>
+                  {part.text}
+                </a>
+              ) : <span key={i}>{part.text}</span>
+            )
           )}
         </div>
+
+        {/* Reactions */}
+        {hasReactions && (
+          <div className={`flex gap-1 mt-1 flex-wrap ${isMe ? "justify-end" : "justify-start"}`}>
+            {Object.entries(reactionGroups).map(([emoji, count]) => (
+              <span key={emoji} className="px-1.5 py-0.5 rounded-full text-xs"
+                style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                {emoji}{count > 1 ? ` ${count}` : ""}
+              </span>
+            ))}
+          </div>
+        )}
+
         <div className={`flex items-center gap-1.5 mt-1 ${isMe ? "flex-row-reverse" : ""}`}
           style={{ paddingInline: 4 }}>
           <span style={{ fontSize: 10, color: "#4a5568" }}>{time}</span>
-          {isMe && <Tick status={msg.status} />}
+          {isMe && !msg.deleted && <Tick status={msg.status} />}
         </div>
       </div>
     </div>
@@ -93,11 +147,11 @@ export default function ChatPage() {
   const [roomCode, setRoomCode] = useState("");
   const [otherOnline, setOtherOnline] = useState(false);
   const [otherLastSeen, setOtherLastSeen] = useState<Date | null>(null);
+  const [activeMsg, setActiveMsg] = useState<Message | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const playerIdRef = useRef("");
 
-  // Load player info & setup presence
   useEffect(() => {
     const id = localStorage.getItem("playerId") || "";
     const pn = localStorage.getItem("playerName") || "Player 01";
@@ -113,26 +167,17 @@ export default function ChatPage() {
     cleanupExpired(rid).catch(() => {});
     registerPushToken(rid, id).catch(() => {});
 
-    // Mark self as online
     updatePresence(rid, id, true).catch(() => {});
     const ping = setInterval(() => updatePresence(rid, id, true).catch(() => {}), 20000);
-
-    // Mark offline when leaving
     const markOffline = () => updatePresence(rid, id, false).catch(() => {});
     window.addEventListener("beforeunload", markOffline);
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) updatePresence(rid, id, false).catch(() => {});
       else updatePresence(rid, id, true).catch(() => {});
     });
-
-    return () => {
-      clearInterval(ping);
-      markOffline();
-      window.removeEventListener("beforeunload", markOffline);
-    };
+    return () => { clearInterval(ping); markOffline(); window.removeEventListener("beforeunload", markOffline); };
   }, [roomId]);
 
-  // Listen to other player's presence
   useEffect(() => {
     if (!roomId || !playerId) return;
     const rid = roomId as string;
@@ -177,14 +222,22 @@ export default function ChatPage() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
-  const statusText = otherOnline
-    ? "● online"
-    : otherLastSeen
-    ? `last seen ${formatLastSeen(otherLastSeen)}`
-    : "● offline";
-  const statusColor = otherOnline ? "#00ffaa" : "#4a5568";
+  const handleReact = useCallback(async (emoji: string) => {
+    if (!activeMsg || !playerId || !roomId) return;
+    const current = activeMsg.reactions?.[playerId];
+    await reactToMessage(roomId as string, activeMsg.id, playerId, current === emoji ? null : emoji);
+    setActiveMsg(null);
+  }, [activeMsg, playerId, roomId]);
 
-  // First letter of name for avatar
+  const handleDelete = useCallback(async () => {
+    if (!activeMsg || !roomId) return;
+    await deleteMessage(roomId as string, activeMsg.id);
+    setActiveMsg(null);
+  }, [activeMsg, roomId]);
+
+  const statusText = otherOnline ? "● online"
+    : otherLastSeen ? `last seen ${formatLastSeen(otherLastSeen)}` : "● offline";
+  const statusColor = otherOnline ? "#00ffaa" : "#4a5568";
   const avatarLetter = otherName.charAt(0).toUpperCase();
 
   return (
@@ -206,25 +259,16 @@ export default function ChatPage() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="text-[10px] tracking-widest px-2 py-1 rounded-lg"
-            style={{ border: "1px solid rgba(255,255,255,0.05)", color: "#2d3748" }}>
-            {roomCode}
-          </div>
-          <button onClick={() => router.push("/game")}
-            className="w-9 h-9 rounded-xl flex items-center justify-center active:scale-90 transition-transform"
-            style={{ background: "rgba(0,255,170,0.07)", border: "1px solid rgba(0,255,170,0.18)", fontSize: 18 }}>
-            🎮
-          </button>
+        <div className="text-[10px] tracking-widest px-2 py-1 rounded-lg"
+          style={{ border: "1px solid rgba(255,255,255,0.05)", color: "#2d3748" }}>
+          {roomCode}
         </div>
       </div>
 
       {/* Notice */}
       <div className="flex items-center justify-center py-1.5"
         style={{ background: "rgba(255,255,255,0.02)", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-        <span style={{ fontSize: 10, color: "#2d3748" }}>
-          ⏱ Read → 1hr · Unread → 4hr
-        </span>
+        <span style={{ fontSize: 10, color: "#2d3748" }}>⏱ Read → 1hr · Unread → 4hr</span>
       </div>
 
       {/* Messages */}
@@ -243,6 +287,7 @@ export default function ChatPage() {
             msg={msg}
             isMe={msg.senderId === playerId}
             onSeen={() => markSeen(roomId as string, msg.id)}
+            onLongPress={() => setActiveMsg(msg)}
           />
         ))}
         <div ref={bottomRef} />
@@ -252,6 +297,11 @@ export default function ChatPage() {
       <div className="px-3 pb-3 pt-2 safe-bottom shrink-0"
         style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
         <div className="flex items-end gap-2">
+          <button onClick={() => router.push("/game")}
+            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 active:scale-90 transition-transform"
+            style={{ background: "rgba(0,255,170,0.07)", border: "1px solid rgba(0,255,170,0.18)", fontSize: 18 }}>
+            🎮
+          </button>
           <textarea
             ref={inputRef}
             value={text}
@@ -263,14 +313,9 @@ export default function ChatPage() {
             style={{
               background: "rgba(255,255,255,0.05)",
               border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 16,
-              padding: "12px 14px",
-              minHeight: 48,
-              maxHeight: 120,
-              lineHeight: 1.5,
-              fontFamily: "inherit",
-              fontSize: 14,
-              color: "#e2e8f0",
+              borderRadius: 16, padding: "12px 14px",
+              minHeight: 48, maxHeight: 120, lineHeight: 1.5,
+              fontFamily: "inherit", fontSize: 14, color: "#e2e8f0",
             }}
             onFocus={e => e.currentTarget.style.borderColor = "rgba(0,255,170,0.3)"}
             onBlur={e => e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"}
@@ -291,6 +336,52 @@ export default function ChatPage() {
           </button>
         </div>
       </div>
+
+      {/* Action sheet — long press menu */}
+      {activeMsg && (
+        <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.6)" }}
+          onClick={() => setActiveMsg(null)}>
+          <div className="w-full slide-up pb-safe" onClick={e => e.stopPropagation()}
+            style={{ background: "#12102a", borderRadius: "24px 24px 0 0", border: "1px solid rgba(255,255,255,0.08)", paddingBottom: "env(safe-area-inset-bottom, 16px)" }}>
+
+            {/* Emoji reactions */}
+            <div className="flex justify-center gap-3 px-6 pt-5 pb-4">
+              {EMOJIS.map(emoji => {
+                const myReaction = activeMsg.reactions?.[playerId];
+                const selected = myReaction === emoji;
+                return (
+                  <button key={emoji} onClick={() => handleReact(emoji)}
+                    className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl active:scale-90 transition-all"
+                    style={{
+                      background: selected ? "rgba(0,255,170,0.15)" : "rgba(255,255,255,0.06)",
+                      border: selected ? "2px solid rgba(0,255,170,0.5)" : "2px solid transparent",
+                    }}>
+                    {emoji}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "0 16px" }} />
+
+            {/* Delete — only for own messages */}
+            {activeMsg.senderId === playerId && !activeMsg.deleted && (
+              <button onClick={handleDelete}
+                className="w-full px-6 py-4 flex items-center gap-3 active:opacity-60"
+                style={{ color: "#ff4444" }}>
+                <span className="text-lg">🗑️</span>
+                <span className="text-sm font-medium">Delete for everyone</span>
+              </button>
+            )}
+
+            <button onClick={() => setActiveMsg(null)}
+              className="w-full px-6 py-4 flex items-center justify-center active:opacity-60"
+              style={{ color: "#4a5568", fontSize: 14 }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
