@@ -107,21 +107,12 @@ export default function Home() {
 
       <div className="relative z-10 flex flex-col h-full">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 pt-5 pb-1">
-          <div>
-            <div className="text-2xl font-bold tracking-widest">
-              <span className="glow-green" style={{ color: "#00ffaa" }}>TYPE</span>
-              <span className="text-white">BATTLE</span>
-            </div>
-            <div className="text-[10px] tracking-[0.3em]" style={{ color: "#4a5568" }}>MULTIPLAYER v2.4</div>
+        <div className="flex flex-col items-center pt-8 pb-2">
+          <div className="text-4xl font-black tracking-widest mb-1">
+            <span style={{ color: "#00ffaa", textShadow: "0 0 20px #00ffaa88, 0 0 40px #00ffaa44" }}>TYPE</span>
+            <span className="text-white" style={{ textShadow: "0 0 10px rgba(255,255,255,0.15)" }}>BATTLE</span>
           </div>
-          <button
-            onClick={() => router.push("/settings")}
-            className="px-3 py-2 rounded-xl text-xs tracking-widest active:scale-95 transition-transform"
-            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#4a5568" }}
-          >
-            ⚙ SETTINGS
-          </button>
+          <div className="text-[10px] tracking-[0.35em]" style={{ color: "#4a5568" }}>MULTIPLAYER · v2.4</div>
         </div>
 
         {/* Online bar */}
@@ -212,8 +203,8 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Play button */}
-        <div className="px-5 pb-6 safe-bottom">
+        {/* Buttons */}
+        <div className="px-5 pb-6 safe-bottom flex flex-col gap-3">
           <button
             onClick={() => router.push("/game")}
             className="w-full py-4 rounded-2xl font-bold text-base tracking-widest text-black active:scale-[0.97] transition-transform pulse-btn"
@@ -223,6 +214,17 @@ export default function Home() {
             }}
           >
             ▶ &nbsp; PLAY NOW
+          </button>
+          <button
+            onClick={() => router.push("/settings")}
+            className="w-full py-3 rounded-2xl font-bold text-sm tracking-widest active:scale-[0.97] transition-transform"
+            style={{
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              color: "#718096",
+            }}
+          >
+            ⚙ &nbsp; SETTINGS
           </button>
         </div>
       </div>
