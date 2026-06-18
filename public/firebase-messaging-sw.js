@@ -13,14 +13,14 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 const CREATIVE_BODIES = [
-  "🚂 The train is catching up — jump back in the race!",
-  "⚡ A new move dropped. Don't fall behind!",
-  "🔥 The track is heating up. Sprint!",
-  "🏃 Someone just made their move. Stay ahead!",
-  "💨 The race continues... your turn!",
-  "🎮 New action on the track. Check it out!",
-  "🌀 Something big just happened in the game!",
-  "⚠️ Danger ahead — get back in the race!",
+  "⌨️ It's time to increase your typing speed!",
+  "🚂 The train is catching up — get back in the race!",
+  "⚡ It's time to increase your typing speed!",
+  "🔥 New move on the track. Sprint back!",
+  "💨 It's time to increase your typing speed!",
+  "🎮 The race continues... your turn!",
+  "⚠️ It's time to increase your typing speed!",
+  "🌀 Don't fall behind — jump back in!",
 ];
 
 messaging.onBackgroundMessage((payload) => {

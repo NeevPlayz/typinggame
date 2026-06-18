@@ -17,14 +17,14 @@ function getAdminApp() {
 const ONE_HOUR = 60 * 60 * 1000;
 
 const CREATIVE_BODIES = [
-  "🚂 The train is catching up — jump back in the race!",
-  "⚡ A new move dropped. Don't fall behind!",
-  "🔥 The track is heating up. Sprint!",
-  "🏃 Someone just made their move. Stay ahead!",
-  "💨 The race continues... your turn to sprint!",
-  "🎮 New action on the track. Check it out!",
-  "⚠️ Danger ahead — get back in the race!",
-  "🌀 Something just happened in the game. Move!",
+  "⌨️ It's time to increase your typing speed!",
+  "🚂 The train is catching up — get back in the race!",
+  "⚡ It's time to increase your typing speed!",
+  "🔥 New move on the track. Sprint back!",
+  "💨 It's time to increase your typing speed!",
+  "🎮 The race continues... your turn!",
+  "⚠️ It's time to increase your typing speed!",
+  "🌀 Don't fall behind — jump back in!",
 ];
 
 export async function POST(req: NextRequest) {
@@ -47,10 +47,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, skipped: true, reason: "rate limited" });
     }
 
-    // Find the OTHER player's FCM token
-    const otherId =
-      roomData.player1 === senderId ? roomData.player2 : roomData.player1;
-
+    // Fixed player IDs — derive other player directly
+    const otherId = senderId === "ragini" ? "neev" : senderId === "neev" ? "ragini" : null;
     if (!otherId) return NextResponse.json({ ok: true, skipped: true, reason: "no other player" });
 
     const tokenSnap = await db
