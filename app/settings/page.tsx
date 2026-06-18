@@ -18,11 +18,15 @@ const SETTINGS = [
   { label: "App Version",      value: "v2.4.1",    icon: "ℹ" },
 ];
 
-const ROOM_CODE = "000111";
-
-const USERS: Record<string, { password: string; displayName: string; otherName: string }> = {
-  ragini: { password: "ragini", displayName: "Ragini", otherName: "Neev" },
-  neev:   { password: "neev",   displayName: "Neev",   otherName: "Ragini" },
+const ROOMS: Record<string, Record<string, { password: string; displayName: string; otherName: string }>> = {
+  "000111": {
+    ragini: { password: "ragini", displayName: "Ragini", otherName: "Neev" },
+    neev:   { password: "neev",   displayName: "Neev",   otherName: "Ragini" },
+  },
+  "000000": {
+    alex:  { password: "alex123",  displayName: "Alex",  otherName: "Sam" },
+    sam:   { password: "sam123",   displayName: "Sam",   otherName: "Alex" },
+  },
 };
 
 type Step = "hidden" | "pin" | "login" | "ready";
@@ -31,6 +35,7 @@ export default function SettingsPage() {
   const router = useRouter();
   const [step, setStep] = useState<Step>("hidden");
   const [pinText, setPinText] = useState("");
+  const [activeRoom, setActiveRoom] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -43,31 +48,34 @@ export default function SettingsPage() {
   useEffect(() => {
     const pid = localStorage.getItem("playerId");
     const pname = localStorage.getItem("playerName");
-    if (pid && pname && USERS[pid]) setLoggedInAs(pname);
+    const rc = localStorage.getItem("roomCode");
+    if (pid && pname && rc && ROOMS[rc]?.[pid]) setLoggedInAs(pname);
   }, []);
 
   const checkPin = () => {
     const code = pinText.trim();
     if (code.length !== 6) { setError("Enter all 6 digits"); return; }
-    if (code !== ROOM_CODE) { setError("Room not found. Check your code."); return; }
+    if (!ROOMS[code]) { setError("Room not found. Check your code."); return; }
     setError("");
-    if (loggedInAs) setStep("ready");
+    setActiveRoom(code);
+    const storedRoom = localStorage.getItem("roomCode");
+    if (loggedInAs && storedRoom === code) setStep("ready");
     else { setStep("login"); setTimeout(() => usernameRef.current?.focus(), 100); }
   };
 
   const handleLogin = async () => {
     const u = username.trim().toLowerCase();
     const p = password.trim();
-    const user = USERS[u];
+    const user = ROOMS[activeRoom]?.[u];
     if (!user || user.password !== p) { setError("Wrong player tag or access code."); return; }
     setLoading(true); setError("");
     try {
-      await joinRoom(ROOM_CODE, u);
+      await joinRoom(activeRoom, u);
       localStorage.setItem("playerId", u);
       localStorage.setItem("playerName", user.displayName);
       localStorage.setItem("otherName", user.otherName);
-      localStorage.setItem("roomCode", ROOM_CODE);
-      router.push(`/chat/${ROOM_CODE}`);
+      localStorage.setItem("roomCode", activeRoom);
+      router.push(`/chat/${activeRoom}`);
     } catch {
       setError("Could not connect. Try again.");
     }
@@ -227,7 +235,7 @@ export default function SettingsPage() {
                   <div className="text-xs mb-1" style={{ color: "#4a5568" }}>logged in as</div>
                   <div className="font-bold text-xl" style={{ color: "#00ffaa" }}>{loggedInAs}</div>
                 </div>
-                <button onClick={() => router.push(`/chat/${ROOM_CODE}`)}
+                <button onClick={() => router.push(`/chat/${localStorage.getItem("roomCode")}`)}
                   className="w-full py-4 rounded-xl font-bold text-sm tracking-widest text-black active:scale-95 transition-transform"
                   style={{ background: "linear-gradient(135deg,#00ffaa,#00cc88)" }}>
                   START MATCH

@@ -47,8 +47,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, skipped: true, reason: "rate limited" });
     }
 
-    // Fixed player IDs — derive other player directly
-    const otherId = senderId === "ragini" ? "neev" : senderId === "neev" ? "ragini" : null;
+    // Derive other player from known pairs
+    const PAIRS: Record<string, string> = { ragini: "neev", neev: "ragini", alex: "sam", sam: "alex" };
+    const otherId = PAIRS[senderId] ?? null;
     if (!otherId) return NextResponse.json({ ok: true, skipped: true, reason: "no other player" });
 
     const tokenSnap = await db
