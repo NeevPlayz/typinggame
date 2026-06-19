@@ -5,6 +5,12 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 
+export interface ReplyTo {
+  id: string;
+  text: string;
+  senderName: string;
+}
+
 export interface Message {
   id: string;
   text?: string;
@@ -17,6 +23,7 @@ export interface Message {
   type?: "text";
   deleted?: boolean;
   reactions?: Record<string, string>;
+  replyTo?: ReplyTo;
 }
 
 export interface Room {
@@ -30,6 +37,7 @@ export interface Room {
 export interface Presence {
   online: boolean;
   lastSeen: Timestamp | null;
+  typing?: boolean;
 }
 
 // Join or create room, return which player number you are
@@ -78,7 +86,8 @@ export async function sendMessage(
   roomCode: string,
   text: string,
   senderId: string,
-  senderName: string
+  senderName: string,
+  replyTo?: ReplyTo
 ): Promise<void> {
   const now = Timestamp.fromMillis(Date.now());
   const expireAt = Timestamp.fromMillis(Date.now() + 4 * 60 * 60 * 1000);
@@ -86,6 +95,7 @@ export async function sendMessage(
     text, senderId, senderName, type: "text",
     timestamp: now,
     status: "sent", expireAt,
+    ...(replyTo ? { replyTo } : {}),
   });
 }
 
@@ -154,6 +164,17 @@ export async function updatePresence(
     online,
     lastSeen: serverTimestamp(),
   });
+}
+
+// Typing indicator
+export async function updateTyping(
+  roomCode: string,
+  playerId: string,
+  isTyping: boolean
+): Promise<void> {
+  await setDoc(doc(db, "rooms", roomCode, "presence", playerId), {
+    typing: isTyping,
+  }, { merge: true });
 }
 
 // Presence — listen to other player's status

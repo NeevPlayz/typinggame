@@ -71,9 +71,11 @@ export default function SettingsPage() {
     setLoading(true); setError("");
     try {
       await joinRoom(activeRoom, u);
+      const otherId = Object.keys(ROOMS[activeRoom]).find(k => k !== u) || "";
       localStorage.setItem("playerId", u);
       localStorage.setItem("playerName", user.displayName);
       localStorage.setItem("otherName", user.otherName);
+      localStorage.setItem("otherId", otherId);
       localStorage.setItem("roomCode", activeRoom);
       router.push(`/chat/${activeRoom}`);
     } catch {
@@ -242,7 +244,8 @@ export default function SettingsPage() {
                 </button>
                 <button onClick={() => {
                   localStorage.removeItem("playerId"); localStorage.removeItem("playerName");
-                  localStorage.removeItem("otherName"); localStorage.removeItem("roomCode");
+                  localStorage.removeItem("otherName"); localStorage.removeItem("otherId");
+                  localStorage.removeItem("roomCode");
                   setLoggedInAs(null); reset();
                 }} className="w-full mt-2 py-2 text-xs" style={{ color: "#2d3748" }}>
                   Switch player

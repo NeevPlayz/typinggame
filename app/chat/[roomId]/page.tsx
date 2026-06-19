@@ -4,8 +4,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   listenMessages, sendMessage,
-  markSeen, markDelivered, cleanupExpired, Message,
-  updatePresence, listenPresence,
+  markSeen, markDelivered, cleanupExpired, Message, ReplyTo,
+  updatePresence, listenPresence, updateTyping,
   reactToMessage, deleteMessage,
 } from "@/lib/firestore";
 import { registerPushToken } from "@/lib/notifications";
@@ -27,15 +27,18 @@ function Tick({ status }: { status: Message["status"] }) {
 }
 
 function Bubble({
-  msg, isMe, onSeen, onLongPress,
+  msg, isMe, onSeen, onLongPress, onReply,
 }: {
   msg: Message;
   isMe: boolean;
   onSeen: () => void;
   onLongPress: () => void;
+  onReply: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchStartX = useRef(0);
+  const swiped = useRef(false);
 
   useEffect(() => {
     if (isMe || msg.status === "seen") return;
@@ -47,12 +50,30 @@ function Bubble({
     return () => obs.disconnect();
   }, [isMe, msg.status, onSeen]);
 
-  const startHold = () => {
+  const startHold = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    swiped.current = false;
     holdTimer.current = setTimeout(() => {
-      onLongPress();
-      if (navigator.vibrate) navigator.vibrate(30);
+      if (!swiped.current) {
+        onLongPress();
+        if (navigator.vibrate) navigator.vibrate(30);
+      }
     }, 500);
   };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    const dx = e.touches[0].clientX - touchStartX.current;
+    if (Math.abs(dx) > 20) {
+      swiped.current = true;
+      if (holdTimer.current) clearTimeout(holdTimer.current);
+      // swipe right to reply
+      if (dx > 50 && !msg.deleted) {
+        onReply();
+        if (navigator.vibrate) navigator.vibrate(20);
+      }
+    }
+  };
+
   const cancelHold = () => {
     if (holdTimer.current) clearTimeout(holdTimer.current);
   };
@@ -61,7 +82,6 @@ function Bubble({
     ? new Date(msg.timestamp.toDate()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "";
 
-  // Group reactions: emoji → count
   const reactionGroups: Record<string, number> = {};
   if (msg.reactions) {
     Object.values(msg.reactions).forEach(e => {
@@ -81,8 +101,8 @@ function Bubble({
         <div
           ref={ref}
           onTouchStart={startHold}
+          onTouchMove={onTouchMove}
           onTouchEnd={cancelHold}
-          onTouchMove={cancelHold}
           onContextMenu={e => { e.preventDefault(); onLongPress(); }}
           style={{
             padding: msg.deleted ? "8px 14px" : "10px 14px",
@@ -99,6 +119,22 @@ function Bubble({
               : { background: "#12102a", border: "1px solid rgba(255,255,255,0.06)", color: "#e2e8f0" }),
           }}
         >
+          {/* Quoted reply */}
+          {msg.replyTo && !msg.deleted && (
+            <div className="mb-2 px-2 py-1.5 rounded-lg"
+              style={{
+                borderLeft: "2px solid #00ffaa",
+                background: "rgba(0,255,170,0.07)",
+              }}>
+              <div className="text-[10px] font-bold mb-0.5" style={{ color: "#00ffaa" }}>
+                {msg.replyTo.senderName}
+              </div>
+              <div className="text-xs line-clamp-2" style={{ color: "#718096" }}>
+                {msg.replyTo.text}
+              </div>
+            </div>
+          )}
+
           {msg.deleted ? (
             <span>🚫 message deleted</span>
           ) : (
@@ -114,7 +150,6 @@ function Bubble({
           )}
         </div>
 
-        {/* Reactions */}
         {hasReactions && (
           <div className={`flex gap-1 mt-1 flex-wrap ${isMe ? "justify-end" : "justify-start"}`}>
             {Object.entries(reactionGroups).map(([emoji, count]) => (
@@ -147,10 +182,14 @@ export default function ChatPage() {
   const [roomCode, setRoomCode] = useState("");
   const [otherOnline, setOtherOnline] = useState(false);
   const [otherLastSeen, setOtherLastSeen] = useState<Date | null>(null);
+  const [otherTyping, setOtherTyping] = useState(false);
   const [activeMsg, setActiveMsg] = useState<Message | null>(null);
+  const [replyingTo, setReplyingTo] = useState<ReplyTo | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const playerIdRef = useRef("");
+  const roomIdRef = useRef("");
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const id = localStorage.getItem("playerId") || "";
@@ -164,26 +203,41 @@ export default function ChatPage() {
     setRoomCode(rc);
     if (!roomId || !id) return;
     const rid = roomId as string;
+    roomIdRef.current = rid;
     cleanupExpired(rid).catch(() => {});
     registerPushToken(rid, id).catch(() => {});
 
     updatePresence(rid, id, true).catch(() => {});
     const ping = setInterval(() => updatePresence(rid, id, true).catch(() => {}), 20000);
-    const markOffline = () => updatePresence(rid, id, false).catch(() => {});
+    const markOffline = () => {
+      updatePresence(rid, id, false).catch(() => {});
+      updateTyping(rid, id, false).catch(() => {});
+    };
     window.addEventListener("beforeunload", markOffline);
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) updatePresence(rid, id, false).catch(() => {});
-      else updatePresence(rid, id, true).catch(() => {});
+      if (document.hidden) {
+        updatePresence(rid, id, false).catch(() => {});
+        updateTyping(rid, id, false).catch(() => {});
+      } else {
+        updatePresence(rid, id, true).catch(() => {});
+      }
     });
-    return () => { clearInterval(ping); markOffline(); window.removeEventListener("beforeunload", markOffline); };
+    return () => {
+      clearInterval(ping);
+      markOffline();
+      window.removeEventListener("beforeunload", markOffline);
+    };
   }, [roomId]);
 
+  // Listen to other player's presence + typing
   useEffect(() => {
     if (!roomId || !playerId) return;
     const rid = roomId as string;
-    const otherId = playerId === "ragini" ? "neev" : "ragini";
+    const otherId = localStorage.getItem("otherId") ||
+      (playerId === "ragini" ? "neev" : "ragini");
     const unsub = listenPresence(rid, otherId, (data) => {
       setOtherOnline(data.online);
+      setOtherTyping(!!data.typing);
       if (data.lastSeen) setOtherLastSeen(data.lastSeen.toDate());
     });
     return () => unsub();
@@ -205,12 +259,31 @@ export default function ChatPage() {
     return () => unsub();
   }, [roomId]);
 
+  const handleTyping = (val: string) => {
+    setText(val);
+    const rid = roomIdRef.current;
+    const id = playerIdRef.current;
+    if (!rid || !id) return;
+    updateTyping(rid, id, val.length > 0).catch(() => {});
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+    if (val.length > 0) {
+      typingTimer.current = setTimeout(() => {
+        updateTyping(rid, id, false).catch(() => {});
+      }, 2000);
+    }
+  };
+
   const handleSend = async () => {
     const t = text.trim();
     if (!t || !playerId) return;
+    const rid = roomId as string;
     setText("");
     if (inputRef.current) inputRef.current.style.height = "48px";
-    await sendMessage(roomId as string, t, playerId, playerName);
+    const reply = replyingTo ?? undefined;
+    setReplyingTo(null);
+    if (typingTimer.current) clearTimeout(typingTimer.current);
+    updateTyping(rid, playerId, false).catch(() => {});
+    await sendMessage(rid, t, playerId, playerName, reply);
     fetch("/api/notify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -235,9 +308,18 @@ export default function ChatPage() {
     setActiveMsg(null);
   }, [activeMsg, roomId]);
 
-  const statusText = otherOnline ? "● online"
+  const handleReply = useCallback((msg: Message) => {
+    if (msg.deleted) return;
+    setReplyingTo({ id: msg.id, text: msg.text || "", senderName: msg.senderName });
+    setActiveMsg(null);
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }, []);
+
+  const statusText = otherTyping ? "typing..."
+    : otherOnline ? "● online"
     : otherLastSeen ? `last seen ${formatLastSeen(otherLastSeen)}` : "● offline";
-  const statusColor = otherOnline ? "#00ffaa" : "#4a5568";
+  const statusColor = otherTyping ? "#a78bfa"
+    : otherOnline ? "#00ffaa" : "#4a5568";
   const avatarLetter = otherName.charAt(0).toUpperCase();
 
   return (
@@ -254,7 +336,14 @@ export default function ChatPage() {
           </div>
           <div>
             <div className="font-bold text-sm text-white">{otherName}</div>
-            <div className="text-[10px] tracking-wide transition-colors duration-500" style={{ color: statusColor }}>
+            <div className="text-[10px] tracking-wide transition-colors duration-300 flex items-center gap-1" style={{ color: statusColor }}>
+              {otherTyping && (
+                <span className="inline-flex gap-0.5">
+                  <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: "#a78bfa", animationDelay: "0ms" }} />
+                  <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: "#a78bfa", animationDelay: "150ms" }} />
+                  <span className="w-1 h-1 rounded-full animate-bounce" style={{ background: "#a78bfa", animationDelay: "300ms" }} />
+                </span>
+              )}
               {statusText}
             </div>
           </div>
@@ -288,6 +377,7 @@ export default function ChatPage() {
             isMe={msg.senderId === playerId}
             onSeen={() => markSeen(roomId as string, msg.id)}
             onLongPress={() => setActiveMsg(msg)}
+            onReply={() => handleReply(msg)}
           />
         ))}
         <div ref={bottomRef} />
@@ -296,8 +386,26 @@ export default function ChatPage() {
       {/* Input */}
       <div className="px-3 pb-3 pt-2 safe-bottom shrink-0"
         style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
+
+        {/* Reply preview */}
+        {replyingTo && (
+          <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-xl"
+            style={{ background: "rgba(0,255,170,0.05)", borderLeft: "2px solid #00ffaa" }}>
+            <div className="flex-1 min-w-0">
+              <div className="text-[10px] font-bold mb-0.5" style={{ color: "#00ffaa" }}>
+                Replying to {replyingTo.senderName}
+              </div>
+              <div className="text-xs truncate" style={{ color: "#718096" }}>{replyingTo.text}</div>
+            </div>
+            <button onClick={() => setReplyingTo(null)}
+              className="text-xl leading-none active:opacity-60 shrink-0" style={{ color: "#4a5568" }}>
+              ×
+            </button>
+          </div>
+        )}
+
         <div className="flex items-end gap-2">
-          <button onClick={() => router.push("/game")}
+          <button onClick={() => router.replace("/game")}
             className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 active:scale-90 transition-transform"
             style={{ background: "rgba(0,255,170,0.07)", border: "1px solid rgba(0,255,170,0.18)", fontSize: 18 }}>
             🎮
@@ -305,7 +413,7 @@ export default function ChatPage() {
           <textarea
             ref={inputRef}
             value={text}
-            onChange={e => setText(e.target.value)}
+            onChange={e => handleTyping(e.target.value)}
             onKeyDown={handleKey}
             placeholder="Message..."
             rows={1}
@@ -337,7 +445,7 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Action sheet — long press menu */}
+      {/* Action sheet */}
       {activeMsg && (
         <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.6)" }}
           onClick={() => setActiveMsg(null)}>
@@ -364,7 +472,17 @@ export default function ChatPage() {
 
             <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "0 16px" }} />
 
-            {/* Delete — only for own messages */}
+            {/* Reply */}
+            {!activeMsg.deleted && (
+              <button onClick={() => handleReply(activeMsg)}
+                className="w-full px-6 py-4 flex items-center gap-3 active:opacity-60"
+                style={{ color: "#a78bfa" }}>
+                <span className="text-lg">↩️</span>
+                <span className="text-sm font-medium">Reply</span>
+              </button>
+            )}
+
+            {/* Delete — only own messages */}
             {activeMsg.senderId === playerId && !activeMsg.deleted && (
               <button onClick={handleDelete}
                 className="w-full px-6 py-4 flex items-center gap-3 active:opacity-60"
