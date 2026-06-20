@@ -38,6 +38,7 @@ export interface Presence {
   online: boolean;
   lastSeen: Timestamp | null;
   typing?: boolean;
+  panic?: boolean;
 }
 
 // Join or create room, return which player number you are
@@ -174,6 +175,20 @@ export async function updateTyping(
 ): Promise<void> {
   await setDoc(doc(db, "rooms", roomCode, "presence", playerId), {
     typing: isTyping,
+  }, { merge: true });
+}
+
+// Panic button — force other player to game screen
+export async function triggerPanic(roomCode: string, targetPlayerId: string): Promise<void> {
+  await setDoc(doc(db, "rooms", roomCode, "presence", targetPlayerId), {
+    panic: true,
+  }, { merge: true });
+}
+
+// Clear panic signal (called by the target after receiving it)
+export async function clearPanic(roomCode: string, playerId: string): Promise<void> {
+  await setDoc(doc(db, "rooms", roomCode, "presence", playerId), {
+    panic: false,
   }, { merge: true });
 }
 

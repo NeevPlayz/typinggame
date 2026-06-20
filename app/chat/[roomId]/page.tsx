@@ -6,6 +6,7 @@ import {
   listenMessages, sendMessage,
   markSeen, markDelivered, cleanupExpired, Message, ReplyTo,
   updatePresence, listenPresence, updateTyping,
+  triggerPanic, clearPanic,
   reactToMessage, deleteMessage,
 } from "@/lib/firestore";
 import { registerPushToken } from "@/lib/notifications";
@@ -185,21 +186,25 @@ export default function ChatPage() {
   const [otherTyping, setOtherTyping] = useState(false);
   const [activeMsg, setActiveMsg] = useState<Message | null>(null);
   const [replyingTo, setReplyingTo] = useState<ReplyTo | null>(null);
+  const [otherId, setOtherId] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const playerIdRef = useRef("");
   const roomIdRef = useRef("");
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isTypingRef = useRef(false);
 
   useEffect(() => {
     const id = localStorage.getItem("playerId") || "";
     const pn = localStorage.getItem("playerName") || "Player 01";
     const on = localStorage.getItem("otherName") || "Player 02";
     const rc = localStorage.getItem("roomCode") || "";
+    const oid = localStorage.getItem("otherId") || (id === "ragini" ? "neev" : "ragini");
     setPlayerId(id);
     playerIdRef.current = id;
     setPlayerName(pn);
     setOtherName(on);
+    setOtherId(oid);
     setRoomCode(rc);
     if (!roomId || !id) return;
     const rid = roomId as string;
@@ -233,15 +238,27 @@ export default function ChatPage() {
   useEffect(() => {
     if (!roomId || !playerId) return;
     const rid = roomId as string;
-    const otherId = localStorage.getItem("otherId") ||
-      (playerId === "ragini" ? "neev" : "ragini");
-    const unsub = listenPresence(rid, otherId, (data) => {
+    const oid = localStorage.getItem("otherId") || (playerId === "ragini" ? "neev" : "ragini");
+    const unsub = listenPresence(rid, oid, (data) => {
       setOtherOnline(data.online);
       setOtherTyping(!!data.typing);
       if (data.lastSeen) setOtherLastSeen(data.lastSeen.toDate());
     });
     return () => unsub();
   }, [roomId, playerId]);
+
+  // Listen to OWN presence for panic signal
+  useEffect(() => {
+    if (!roomId || !playerId) return;
+    const rid = roomId as string;
+    const unsub = listenPresence(rid, playerId, (data) => {
+      if (data.panic) {
+        clearPanic(rid, playerId).catch(() => {});
+        router.replace("/game");
+      }
+    });
+    return () => unsub();
+  }, [roomId, playerId, router]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -264,12 +281,20 @@ export default function ChatPage() {
     const rid = roomIdRef.current;
     const id = playerIdRef.current;
     if (!rid || !id) return;
-    updateTyping(rid, id, val.length > 0).catch(() => {});
     if (typingTimer.current) clearTimeout(typingTimer.current);
     if (val.length > 0) {
+      // Only write to Firestore if not already marked as typing
+      if (!isTypingRef.current) {
+        isTypingRef.current = true;
+        updateTyping(rid, id, true).catch(() => {});
+      }
       typingTimer.current = setTimeout(() => {
+        isTypingRef.current = false;
         updateTyping(rid, id, false).catch(() => {});
-      }, 2000);
+      }, 5000);
+    } else {
+      isTypingRef.current = false;
+      updateTyping(rid, id, false).catch(() => {});
     }
   };
 
@@ -282,6 +307,7 @@ export default function ChatPage() {
     const reply = replyingTo ?? undefined;
     setReplyingTo(null);
     if (typingTimer.current) clearTimeout(typingTimer.current);
+    isTypingRef.current = false;
     updateTyping(rid, playerId, false).catch(() => {});
     await sendMessage(rid, t, playerId, playerName, reply);
     fetch("/api/notify", {
@@ -348,9 +374,18 @@ export default function ChatPage() {
             </div>
           </div>
         </div>
-        <div className="text-[10px] tracking-widest px-2 py-1 rounded-lg"
-          style={{ border: "1px solid rgba(255,255,255,0.05)", color: "#2d3748" }}>
-          {roomCode}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => otherId && roomId && triggerPanic(roomId as string, otherId).catch(() => {})}
+            className="w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 transition-transform"
+            style={{ background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.15)", fontSize: 14 }}
+            title="Switch to game">
+            🎮
+          </button>
+          <div className="text-[10px] tracking-widest px-2 py-1 rounded-lg"
+            style={{ border: "1px solid rgba(255,255,255,0.05)", color: "#2d3748" }}>
+            {roomCode}
+          </div>
         </div>
       </div>
 
