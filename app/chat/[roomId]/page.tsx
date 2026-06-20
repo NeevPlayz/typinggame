@@ -377,8 +377,8 @@ export default function ChatPage() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => otherId && roomId && triggerPanic(roomId as string, otherId).catch(() => {})}
-            className="w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 transition-transform"
-            style={{ background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.15)", fontSize: 14 }}
+            className="w-10 h-10 rounded-xl flex items-center justify-center active:scale-90 transition-transform"
+            style={{ background: "rgba(255,68,68,0.08)", border: "1px solid rgba(255,68,68,0.15)", fontSize: 18 }}
             title="Switch to game">
             🎮
           </button>
