@@ -14,8 +14,6 @@ function getAdminApp() {
   });
 }
 
-const ONE_HOUR = 60 * 60 * 1000;
-
 const CREATIVE_BODIES = [
   "⌨️ It's time to increase your typing speed!",
   "🚂 The train is catching up — get back in the race!",
@@ -35,19 +33,9 @@ export async function POST(req: NextRequest) {
     const app = getAdminApp();
     const db = getFirestore(app);
 
-    // Rate limit: 1 notification per hour per room
-    const roomRef = db.collection("rooms").doc(roomCode);
-    const roomSnap = await roomRef.get();
+    const roomSnap = await db.collection("rooms").doc(roomCode).get();
     if (!roomSnap.exists) return NextResponse.json({ ok: false, reason: "no room" });
 
-    const roomData = roomSnap.data()!;
-    const lastSent: number = roomData.lastNotificationSent || 0;
-
-    if (Date.now() - lastSent < ONE_HOUR) {
-      return NextResponse.json({ ok: true, skipped: true, reason: "rate limited" });
-    }
-
-    // Derive other player from known pairs
     const PAIRS: Record<string, string> = { ragini: "neev", neev: "ragini", alex: "sam", sam: "alex" };
     const otherId = PAIRS[senderId] ?? null;
     if (!otherId) return NextResponse.json({ ok: true, skipped: true, reason: "no other player" });
@@ -60,8 +48,6 @@ export async function POST(req: NextRequest) {
       .get();
 
     if (!tokenSnap.exists) {
-      // Still update timestamp so we don't spam attempts
-      await roomRef.update({ lastNotificationSent: Date.now() });
       return NextResponse.json({ ok: true, skipped: true, reason: "no token" });
     }
 
@@ -86,7 +72,6 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    await roomRef.update({ lastNotificationSent: Date.now() });
     return NextResponse.json({ ok: true });
   } catch (e) {
     console.error("Notify error:", e);

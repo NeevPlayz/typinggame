@@ -164,7 +164,7 @@ export async function updatePresence(
   await setDoc(doc(db, "rooms", roomCode, "presence", playerId), {
     online,
     lastSeen: serverTimestamp(),
-  });
+  }, { merge: true });
 }
 
 // Typing indicator
