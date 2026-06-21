@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist_Mono } from "next/font/google";
 import "./globals.css";
+import NotificationSetup from "./notification-setup";
 
 const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
@@ -27,6 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className={`${mono.variable} font-mono bg-[#0a0a1a] text-white overflow-hidden`}>
+        <NotificationSetup />
         {children}
       </body>
     </html>

@@ -30,8 +30,7 @@ messaging.onBackgroundMessage((payload) => {
     body,
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    tag: 'typebattle-msg',
-    renotify: true,
+    tag: 'typebattle-' + Date.now(),
     silent: false,
   });
 });
