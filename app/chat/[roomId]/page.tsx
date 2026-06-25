@@ -207,6 +207,7 @@ export default function ChatPage() {
   const isTypingRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const isRecordingRef = useRef(false);
 
   useEffect(() => {
     const id = localStorage.getItem("playerId") || "";
@@ -365,8 +366,15 @@ export default function ChatPage() {
   };
 
   const startRecording = async () => {
+    if (isRecordingRef.current || uploading) return;
+    isRecordingRef.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // user may have released the button before mic permission came back
+      if (!isRecordingRef.current) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
         : MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4"
@@ -379,6 +387,7 @@ export default function ChatPage() {
       mr.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
         const blob = new Blob(audioChunksRef.current, { type: mr.mimeType || "audio/webm" });
+        if (blob.size < 1000) return; // too short / empty, don't send
         setUploading(true);
         try {
           const { url, publicId } = await uploadMedia(blob, "audio");
@@ -391,12 +400,17 @@ export default function ChatPage() {
       mr.start();
       mediaRecorderRef.current = mr;
       setRecording(true);
-    } catch { /* mic denied */ }
+    } catch {
+      isRecordingRef.current = false;
+    }
   };
 
   const stopRecording = () => {
-    mediaRecorderRef.current?.stop();
-    mediaRecorderRef.current = null;
+    isRecordingRef.current = false;
+    if (mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current = null;
+    }
     setRecording(false);
   };
 
@@ -518,26 +532,6 @@ export default function ChatPage() {
             style={{ background: "rgba(0,255,170,0.07)", border: "1px solid rgba(0,255,170,0.18)", fontSize: 18 }}>
             🎮
           </button>
-          {/* Image button */}
-          <button onClick={() => imageInputRef.current?.click()} disabled={uploading || recording}
-            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 active:scale-90 transition-transform disabled:opacity-40"
-            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", fontSize: 18 }}>
-            {uploading ? "⏳" : "🖼️"}
-          </button>
-          {/* Voice button */}
-          <button
-            onTouchStart={startRecording} onTouchEnd={stopRecording}
-            onMouseDown={startRecording} onMouseUp={stopRecording}
-            disabled={uploading}
-            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 transition-all disabled:opacity-40"
-            style={{
-              background: recording ? "rgba(255,68,68,0.2)" : "rgba(255,255,255,0.04)",
-              border: recording ? "1px solid rgba(255,68,68,0.5)" : "1px solid rgba(255,255,255,0.08)",
-              fontSize: 18,
-              transform: recording ? "scale(1.1)" : "scale(1)",
-            }}>
-            {recording ? "🔴" : "🎙️"}
-          </button>
           <textarea
             ref={inputRef}
             value={text}
@@ -561,6 +555,28 @@ export default function ChatPage() {
               el.style.height = Math.min(el.scrollHeight, 120) + "px";
             }}
           />
+          {/* Image button */}
+          <button onClick={() => imageInputRef.current?.click()} disabled={uploading || recording}
+            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 active:scale-90 transition-transform disabled:opacity-40"
+            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", fontSize: 18 }}>
+            {uploading ? "⏳" : "🖼️"}
+          </button>
+          {/* Voice button */}
+          <button
+            onTouchStart={e => { e.preventDefault(); startRecording(); }}
+            onTouchEnd={e => { e.preventDefault(); stopRecording(); }}
+            onMouseDown={startRecording}
+            onMouseUp={stopRecording}
+            disabled={uploading}
+            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 transition-all disabled:opacity-40"
+            style={{
+              background: recording ? "rgba(255,68,68,0.2)" : "rgba(255,255,255,0.04)",
+              border: recording ? "1px solid rgba(255,68,68,0.5)" : "1px solid rgba(255,255,255,0.08)",
+              fontSize: 18,
+              transform: recording ? "scale(1.1)" : "scale(1)",
+            }}>
+            {recording ? "🔴" : "🎙️"}
+          </button>
           <button onClick={handleSend} disabled={!text.trim()}
             className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 active:scale-90 transition-transform disabled:opacity-25"
             style={{
