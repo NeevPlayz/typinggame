@@ -20,10 +20,12 @@ export interface Message {
   status: "sent" | "delivered" | "seen";
   seenAt?: Timestamp;
   expireAt?: Timestamp;
-  type?: "text";
+  type?: "text" | "image" | "audio";
   deleted?: boolean;
   reactions?: Record<string, string>;
   replyTo?: ReplyTo;
+  mediaUrl?: string;
+  cloudinaryId?: string;
 }
 
 export interface Room {
@@ -82,21 +84,24 @@ export function listenMessages(
   });
 }
 
-// Send text message — local timestamp to avoid UI delay
+// Send message — local timestamp to avoid UI delay
 export async function sendMessage(
   roomCode: string,
   text: string,
   senderId: string,
   senderName: string,
-  replyTo?: ReplyTo
+  replyTo?: ReplyTo,
+  media?: { url: string; publicId: string; type: "image" | "audio" }
 ): Promise<void> {
   const now = Timestamp.fromMillis(Date.now());
   const expireAt = Timestamp.fromMillis(Date.now() + 4 * 60 * 60 * 1000);
   await addDoc(collection(db, "rooms", roomCode, "messages"), {
-    text, senderId, senderName, type: "text",
+    text, senderId, senderName,
+    type: media?.type ?? "text",
     timestamp: now,
     status: "sent", expireAt,
     ...(replyTo ? { replyTo } : {}),
+    ...(media ? { mediaUrl: media.url, cloudinaryId: media.publicId } : {}),
   });
 }
 
@@ -128,7 +133,18 @@ export async function cleanupExpired(roomCode: string): Promise<void> {
     where("expireAt", "<=", now)
   );
   const snap = await getDocs(q);
-  await Promise.all(snap.docs.map(d => deleteDoc(d.ref)));
+  await Promise.all(snap.docs.map(async (d) => {
+    const data = d.data();
+    if (data.cloudinaryId) {
+      const resourceType = data.type === "audio" ? "video" : "image";
+      fetch("/api/delete-media", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ publicId: data.cloudinaryId, resourceType }),
+      }).catch(() => {});
+    }
+    return deleteDoc(d.ref);
+  }));
 }
 
 // React to a message with an emoji (null removes reaction)

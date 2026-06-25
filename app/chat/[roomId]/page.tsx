@@ -11,6 +11,7 @@ import {
 } from "@/lib/firestore";
 import { registerPushToken } from "@/lib/notifications";
 import { extractLinks } from "@/lib/utils";
+import { uploadMedia } from "@/lib/cloudinary";
 
 const EMOJIS = ["❤️", "😂", "😮", "😢", "🔥", "👍"];
 
@@ -40,6 +41,7 @@ function Bubble({
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartX = useRef(0);
   const swiped = useRef(false);
+  const repliedThisSwipe = useRef(false);
 
   useEffect(() => {
     if (isMe || msg.status === "seen") return;
@@ -54,6 +56,7 @@ function Bubble({
   const startHold = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
     swiped.current = false;
+    repliedThisSwipe.current = false;
     holdTimer.current = setTimeout(() => {
       if (!swiped.current) {
         onLongPress();
@@ -67,8 +70,8 @@ function Bubble({
     if (Math.abs(dx) > 20) {
       swiped.current = true;
       if (holdTimer.current) clearTimeout(holdTimer.current);
-      // swipe right to reply
-      if (dx > 50 && !msg.deleted) {
+      if (dx > 50 && !msg.deleted && !repliedThisSwipe.current) {
+        repliedThisSwipe.current = true;
         onReply();
         if (navigator.vibrate) navigator.vibrate(20);
       }
@@ -138,6 +141,12 @@ function Bubble({
 
           {msg.deleted ? (
             <span>🚫 message deleted</span>
+          ) : msg.type === "image" && msg.mediaUrl ? (
+            <img src={msg.mediaUrl} alt="" className="rounded-xl max-w-full"
+              style={{ maxHeight: 260, display: "block" }}
+              onClick={e => { e.stopPropagation(); window.open(msg.mediaUrl, "_blank"); }} />
+          ) : msg.type === "audio" && msg.mediaUrl ? (
+            <audio controls src={msg.mediaUrl} style={{ width: "100%", minWidth: 200, accentColor: "#00ffaa" }} />
           ) : (
             extractLinks(msg.text || "").map((part, i) =>
               part.isLink ? (
@@ -187,12 +196,17 @@ export default function ChatPage() {
   const [activeMsg, setActiveMsg] = useState<Message | null>(null);
   const [replyingTo, setReplyingTo] = useState<ReplyTo | null>(null);
   const [otherId, setOtherId] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [recording, setRecording] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const playerIdRef = useRef("");
   const roomIdRef = useRef("");
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     const id = localStorage.getItem("playerId") || "";
@@ -218,19 +232,21 @@ export default function ChatPage() {
       updatePresence(rid, id, false).catch(() => {});
       updateTyping(rid, id, false).catch(() => {});
     };
-    window.addEventListener("beforeunload", markOffline);
-    document.addEventListener("visibilitychange", () => {
+    const handleVisibility = () => {
       if (document.hidden) {
         updatePresence(rid, id, false).catch(() => {});
         updateTyping(rid, id, false).catch(() => {});
       } else {
         updatePresence(rid, id, true).catch(() => {});
       }
-    });
+    };
+    window.addEventListener("beforeunload", markOffline);
+    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       clearInterval(ping);
       markOffline();
       window.removeEventListener("beforeunload", markOffline);
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [roomId]);
 
@@ -334,9 +350,62 @@ export default function ChatPage() {
     setActiveMsg(null);
   }, [activeMsg, roomId]);
 
+  const handleImageSend = async (file: File) => {
+    if (!playerId || !roomId) return;
+    setUploading(true);
+    const reply = replyingTo ?? undefined;
+    setReplyingTo(null);
+    try {
+      const { url, publicId } = await uploadMedia(file, "image");
+      await sendMessage(roomId as string, "", playerId, playerName, reply, { url, publicId, type: "image" });
+      fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomCode: roomId, senderId: playerId }) }).catch(() => {});
+    } catch { /* silent */ }
+    setUploading(false);
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
+        : MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4"
+        : "";
+      const mr = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const reply = replyingTo ?? undefined;
+      setReplyingTo(null);
+      audioChunksRef.current = [];
+      mr.ondataavailable = e => audioChunksRef.current.push(e.data);
+      mr.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: mr.mimeType || "audio/webm" });
+        setUploading(true);
+        try {
+          const { url, publicId } = await uploadMedia(blob, "audio");
+          await sendMessage(roomId as string, "", playerId, playerName, reply, { url, publicId, type: "audio" });
+          fetch("/api/notify", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ roomCode: roomId, senderId: playerId }) }).catch(() => {});
+        } catch { /* silent */ }
+        setUploading(false);
+      };
+      mr.start();
+      mediaRecorderRef.current = mr;
+      setRecording(true);
+    } catch { /* mic denied */ }
+  };
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
+    setRecording(false);
+  };
+
   const handleReply = useCallback((msg: Message) => {
     if (msg.deleted) return;
-    setReplyingTo({ id: msg.id, text: msg.text || "", senderName: msg.senderName });
+    const previewText = msg.type === "image" ? "📷 Image"
+      : msg.type === "audio" ? "🎙️ Voice message"
+      : msg.text || "";
+    setReplyingTo({ id: msg.id, text: previewText, senderName: msg.senderName });
     setActiveMsg(null);
     setTimeout(() => inputRef.current?.focus(), 100);
   }, []);
@@ -439,11 +508,35 @@ export default function ChatPage() {
           </div>
         )}
 
+        {/* Hidden image input */}
+        <input ref={imageInputRef} type="file" accept="image/*" className="hidden"
+          onChange={e => { const f = e.target.files?.[0]; if (f) handleImageSend(f); e.target.value = ""; }} />
+
         <div className="flex items-end gap-2">
           <button onClick={() => router.replace("/game")}
             className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 active:scale-90 transition-transform"
             style={{ background: "rgba(0,255,170,0.07)", border: "1px solid rgba(0,255,170,0.18)", fontSize: 18 }}>
             🎮
+          </button>
+          {/* Image button */}
+          <button onClick={() => imageInputRef.current?.click()} disabled={uploading || recording}
+            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 active:scale-90 transition-transform disabled:opacity-40"
+            style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", fontSize: 18 }}>
+            {uploading ? "⏳" : "🖼️"}
+          </button>
+          {/* Voice button */}
+          <button
+            onTouchStart={startRecording} onTouchEnd={stopRecording}
+            onMouseDown={startRecording} onMouseUp={stopRecording}
+            disabled={uploading}
+            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 transition-all disabled:opacity-40"
+            style={{
+              background: recording ? "rgba(255,68,68,0.2)" : "rgba(255,255,255,0.04)",
+              border: recording ? "1px solid rgba(255,68,68,0.5)" : "1px solid rgba(255,255,255,0.08)",
+              fontSize: 18,
+              transform: recording ? "scale(1.1)" : "scale(1)",
+            }}>
+            {recording ? "🔴" : "🎙️"}
           </button>
           <textarea
             ref={inputRef}
